@@ -1,0 +1,18 @@
+services:
+  palmr-demo-manager:
+    build: .
+    ports:
+      - "3585:3585"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - USE_TRAEFIK=true
+      - CLEANUP_AGE_SEC=1800
+      - BASE_DOMAIN=kyantech.com.br
+      - DOMAIN_PREFIX=palmr
+    networks:
+      - dokploy-network
+
+networks:
+  dokploy-network:
+    external: true

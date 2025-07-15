@@ -1,0 +1,51 @@
+# Configuração de exemplo para Traefik com demos dinâmicos
+# Este arquivo deve ser colocado em /etc/dokploy/traefik/dynamic/
+
+# Middleware para redirecionar HTTP para HTTPS
+http:
+  middlewares:
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+# Configuração de exemplo para o Traefik principal
+# Adicione ao seu traefik.yml ou docker-compose do Traefik:
+
+# providers:
+#   swarm:
+#     exposedByDefault: false
+#     watch: false
+#   docker:
+#     exposedByDefault: false
+#   file:
+#     directory: /etc/dokploy/traefik/dynamic
+#     watch: true
+# 
+# entryPoints:
+#   web:
+#     address: ':80'
+#   websecure:
+#     address: ':443'
+#     http:
+#       tls:
+#         certResolver: letsencrypt
+# 
+# api:
+#   insecure: true
+# 
+# certificatesResolvers:
+#   letsencrypt:
+#     acme:
+#       email: daniel.madeireira@gmail.com
+#       storage: /etc/dokploy/traefik/dynamic/acme.json
+#       httpChallenge:
+#         entryPoint: web
+
+# Configuração de rede Docker
+# Certifique-se de que a rede 'dokploy-network' existe:
+# docker network create dokploy-network
+
+# Configuração de DNS
+# Adicione ao seu provedor de DNS:
+# *.kyantech.com.br  A  <IP_DA_SUA_VPS> 
