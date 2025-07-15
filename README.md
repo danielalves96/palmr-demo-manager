@@ -9,6 +9,7 @@ The project is written in Rust, using libraries such as Axum for the web server,
 ## Features
 
 - **Demo Creation**: Creates a Docker container with persistent volume and optional Traefik configurations.
+- **Rate Limiting**: Protects the `/create-demo` endpoint with a limit of 3 requests per minute per IP address.
 - **Monitoring**: Checks container logs to confirm when the API and frontend are ready.
 - **Status**: Endpoint to query the status of an instance (waiting, ready, timeout).
 - **Automatic Cleanup**: Removes containers and volumes after the configured time.
@@ -82,6 +83,26 @@ For dynamic domains to work, you need to configure a wildcard DNS:
 
 This will allow any subdomain like `abc123-palmr.kyantech.com.br` to be resolved to your VPS IP, where Traefik will route to the correct container.
 
+## Rate Limiting
+
+The API implements rate limiting to protect against abuse:
+
+- **Endpoint**: `/create-demo` only
+- **Limit**: 3 requests per minute per IP address
+- **Window**: 60-second sliding window
+- **Response**: HTTP 429 (Too Many Requests) when limit exceeded
+- **Other endpoints**: No rate limiting applied
+
+### Testing Rate Limiting
+
+Use the provided test script to verify rate limiting:
+
+```bash
+./test_rate_limit.sh
+```
+
+This script will make 4 consecutive requests to `/create-demo` and show that the 4th request returns HTTP 429.
+
 ## How to Use
 
 1. Start the server:
@@ -147,6 +168,7 @@ This will allow any subdomain like `abc123-palmr.kyantech.com.br` to be resolved
 
 ## Security Features
 
+- **Rate Limiting**: Protects against abuse with 3 requests per minute per IP on the `/create-demo` endpoint
 - **Container Protection**: The manager container is never affected by cleanup operations
 - **Unique Labels**: Each demo instance has unique Traefik routing labels
 - **Error Handling**: Robust error handling with detailed logging

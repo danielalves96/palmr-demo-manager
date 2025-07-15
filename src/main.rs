@@ -8,29 +8,47 @@ use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use chrono::Utc;
 use axum::response::{IntoResponse, Response};
+use tower_http::cors::CorsLayer;
+use std::net::IpAddr;
+use axum::extract::ConnectInfo;
+use std::net::SocketAddr;
+use std::time::{Duration, Instant};
 
 mod utils;
 
 use utils::{spawn_monitor, spawn_cleanup};
 
 #[derive(Debug)]
-struct AppError(anyhow::Error);
+enum AppError {
+    Internal(anyhow::Error),
+    RateLimitExceeded,
+}
 
 impl From<anyhow::Error> for AppError {
     fn from(err: anyhow::Error) -> Self {
-        AppError(err)
+        AppError::Internal(err)
     }
 }
 
 impl From<bollard::errors::Error> for AppError {
     fn from(err: bollard::errors::Error) -> Self {
-        AppError(err.into())
+        AppError::Internal(err.into())
     }
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, self.0.to_string()).into_response()
+        match self {
+            AppError::Internal(err) => {
+                (axum::http::StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
+            }
+            AppError::RateLimitExceeded => {
+                (
+                    axum::http::StatusCode::TOO_MANY_REQUESTS,
+                    "Rate limit exceeded. Maximum 3 requests per minute per IP."
+                ).into_response()
+            }
+        }
     }
 }
 
@@ -40,6 +58,34 @@ struct AppStateStruct {
     cleanup_age_sec: i64,
 }
 type AppState = AppStateStruct;
+
+// Simple rate limiter: 3 requests per minute per IP
+lazy_static::lazy_static! {
+    static ref RATE_LIMITER: Arc<Mutex<HashMap<IpAddr, Vec<Instant>>>> = {
+        Arc::new(Mutex::new(HashMap::new()))
+    };
+}
+
+fn check_rate_limit(ip: IpAddr) -> Result<(), AppError> {
+    let mut rate_limiter = RATE_LIMITER.lock().unwrap();
+    let now = Instant::now();
+    let window = Duration::from_secs(60); // 1 minute window
+    
+    // Clean old entries
+    if let Some(timestamps) = rate_limiter.get_mut(&ip) {
+        timestamps.retain(|&timestamp| now.duration_since(timestamp) < window);
+        
+        if timestamps.len() >= 3 {
+            return Err(AppError::RateLimitExceeded);
+        }
+        
+        timestamps.push(now);
+    } else {
+        rate_limiter.insert(ip, vec![now]);
+    }
+    
+    Ok(())
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -122,17 +168,22 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Configure CORS
+    let cors = CorsLayer::permissive();
+
     let app = Router::new()
         .route("/create-demo", post(create_demo))
         .route("/status/:id", get(get_status))
         .route("/cleanup", post(cleanup))
         .route("/cleanup-all", post(cleanup_all))
+        .layer(cors)
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)) // 1MB limit
         .with_state(app_state);
 
     let addr = "0.0.0.0:3585".parse::<std::net::SocketAddr>()?;
     info!("listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    Ok(axum::serve(listener, app).await?)
+    Ok(axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?)
 }
 
 #[derive(Deserialize)]
@@ -147,8 +198,15 @@ struct CreateDemoResponse {
 }
 
 #[axum::debug_handler]
-async fn create_demo(State(state): State<AppState>, Json(payload): Json<CreateDemoPayload>) -> Result<Json<CreateDemoResponse>, AppError> {
-    info!("Received request to create demo for ID: {}", payload.palmr_demo_instance_id);
+async fn create_demo(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>, 
+    Json(payload): Json<CreateDemoPayload>
+) -> Result<Json<CreateDemoResponse>, AppError> {
+    // Apply rate limiting
+    let ip = addr.ip();
+    check_rate_limit(ip)?;
+    info!("Rate limit check passed for IP: {}. Creating demo for ID: {}", ip, payload.palmr_demo_instance_id);
 
     let docker = Docker::connect_with_local_defaults()?;
     let encryption_key = Uuid::new_v4().to_string().replace("-", "");
@@ -157,13 +215,13 @@ async fn create_demo(State(state): State<AppState>, Json(payload): Json<CreateDe
     let volume_name = format!("palmr_data_{}", instance_id);
     
     if let Ok(_) = docker.inspect_container(&container_name, None).await {
-        return Err(AppError(anyhow::anyhow!("Container {} already exists", container_name)));
+        return Err(AppError::Internal(anyhow::anyhow!("Container {} already exists", container_name)));
     }
     
     {
         let state_guard = state.states.lock().unwrap();
         if state_guard.contains_key(&instance_id) {
-            return Err(AppError(anyhow::anyhow!("Demo instance {} is already being processed", instance_id)));
+            return Err(AppError::Internal(anyhow::anyhow!("Demo instance {} is already being processed", instance_id)));
         }
     }
     let use_traefik = std::env::var("USE_TRAEFIK").ok().and_then(|s| s.parse::<bool>().ok()).unwrap_or(false);
@@ -240,9 +298,9 @@ async fn create_demo(State(state): State<AppState>, Json(payload): Json<CreateDe
     let container = docker.create_container(Some(bollard::container::CreateContainerOptions {
         name: container_name.clone(),
         ..Default::default()
-    }), config).await.map_err(|e| AppError(e.into()))?;
+    }), config).await.map_err(|e| AppError::Internal(e.into()))?;
 info!("Container {} created with ID: {}", container_name, container.id);
-docker.start_container::<String>(&container_name, None).await.map_err(|e| AppError(e.into()))?;
+docker.start_container::<String>(&container_name, None).await.map_err(|e| AppError::Internal(e.into()))?;
 info!("Container {} started successfully. Starting background monitoring.", container_name);
 {
     let mut state_guard = state.states.lock().unwrap();
