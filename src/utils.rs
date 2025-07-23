@@ -55,13 +55,13 @@ pub fn spawn_monitor(container_name: String, instance_id: String, use_traefik: b
                     }
                 }
             }
-            if log_string.contains("API is ready! Starting frontend...") {
+            if log_string.contains("2/2 - Palmr. starting, be patient...") {
                 api_ready = true;
                 info!("API ready message found for container {}. Waiting 10 seconds for frontend.", container_name);
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 
                 access_url = Some(if use_traefik {
-                    format!("https://{}-{}.{}", instance_id, domain_prefix, base_domain)
+                    format!("http://{}-{}.{}", instance_id, domain_prefix, base_domain)
                 } else {
                     "http://localhost:5487".to_string()
                 });

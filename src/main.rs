@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use bollard::{Docker, container::{NetworkingConfig, ListContainersOptions}};
-use uuid::Uuid;
 use tracing::{info, error, Level};
 use tracing_subscriber::FmtSubscriber;
 use axum::{routing::{post, get}, Json, Router, extract::{State, Path}};
@@ -209,7 +208,6 @@ async fn create_demo(
     info!("Rate limit check passed for IP: {}. Creating demo for ID: {}", ip, payload.palmr_demo_instance_id);
 
     let docker = Docker::connect_with_local_defaults()?;
-    let encryption_key = Uuid::new_v4().to_string().replace("-", "");
     let instance_id = payload.palmr_demo_instance_id;
     let container_name = format!("{}-palmr-demo", instance_id);
     let volume_name = format!("palmr_data_{}", instance_id);
@@ -256,7 +254,6 @@ async fn create_demo(
 
         let dynamic_host = format!("{}-{}.{}", instance_id, domain_prefix, base_domain);
         let router_web = format!("palmr-demo-{}-web", instance_id);
-        let router_websecure = format!("palmr-demo-{}-websecure", instance_id);
         let service_name = format!("palmr-demo-{}-service", instance_id);
         
         labels = Some(std::collections::HashMap::from([
@@ -265,11 +262,6 @@ async fn create_demo(
             (format!("traefik.http.routers.{}.rule", router_web), format!("Host(`{}`)", dynamic_host)),
             (format!("traefik.http.routers.{}.entrypoints", router_web), "web".to_string()),
             (format!("traefik.http.routers.{}.service", router_web), service_name.clone()),
-            (format!("traefik.http.routers.{}.middlewares", router_web), "redirect-to-https@file".to_string()),
-            (format!("traefik.http.routers.{}.rule", router_websecure), format!("Host(`{}`)", dynamic_host)),
-            (format!("traefik.http.routers.{}.entrypoints", router_websecure), "websecure".to_string()),
-            (format!("traefik.http.routers.{}.service", router_websecure), service_name.clone()),
-            (format!("traefik.http.routers.{}.tls.certresolver", router_websecure), "letsencrypt".to_string()),
             (format!("traefik.http.services.{}.loadbalancer.server.port", service_name), container_port.clone()),
         ]));
     }
@@ -277,12 +269,7 @@ async fn create_demo(
     let config = bollard::container::Config {
         image: Some("kyantech/palmr:latest".to_string()),
         env: Some(vec![
-            "ENABLE_S3=false".to_string(),
             "DEMO_MODE=true".to_string(),
-            format!("ENCRYPTION_KEY={}", encryption_key),
-            "PALMR_UID=1000".to_string(),
-            "PALMR_GID=1000".to_string(),
-            "SECURE_SITE=true".to_string(),
         ]),
         labels,
         host_config: Some(bollard::models::HostConfig {
